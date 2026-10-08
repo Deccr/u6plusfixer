@@ -56,7 +56,7 @@ About 10 minutes per AP.
 | 🔌 USB-serial adapter | 3.3 V logic (FT232, CP2102, CH340...). Its VCC pin stays **unconnected**. |
 | 🧷 A way onto the UART pads | The header is unpopulated: solder a 4-pin header or wires, or hold pogo pins in place, i just literally let them sit in the hole on my desk smile |
 | ⚡ PoE injector + Ethernet cable | Injector's LAN port cabled **straight to the laptop**: no switch, no router |
-| 💻 Windows 10/11 laptop | Recovery tool uses built-in PowerShell and OpenSSH |
+| 💻 Windows 10/11 PC with both WiFi and an Ethernet Interface (or just swap between the AP and Network after prepare.bat) | Recovery tool uses built-in PowerShell and OpenSSH |
 | 🐍 Python 3.8+ | Only once, to download and build the firmware images (`Prepare.bat`) |
 
 ## Wiring
@@ -90,7 +90,7 @@ images locally. Nothing from Ubiquiti is stored in this repository.
 ```
 
 **2. Wire up.** Open the AP, connect RX / TX / GND as above, cable the PoE injector's LAN port to the
-laptop. Leave the PoE **unplugged**.
+pc. Leave the PoE **unplugged**.
 
 **3. Fix.** Double-click **`U6Plus-Fixer.bat`**, choose **Fix a bricked unit**, press **Start**, and plug
 in the PoE when the banner turns yellow. Then hands off until it turns green.
