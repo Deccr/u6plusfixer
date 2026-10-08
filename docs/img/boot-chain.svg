@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 340" width="760" height="340" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" role="img" aria-label="Stock boot stops at BL2; the fixed boot reads the eMMC on one slow line and loads the kernel from SPI flash">
+  <title>U6+ boot chain, stock vs fixed</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8c959f"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#cf222e"/></marker>
+  </defs>
+  <rect x="0.5" y="0.5" width="759" height="339" rx="16" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="24" y="38" font-size="16" font-weight="700" fill="#1f2328">The fix slows every eMMC read and moves the kernel to SPI flash</text>
+
+  <text x="24" y="76" font-weight="700" fill="#1f2328">Stock boot: stops at the boot loader</text>
+  <g fill="none" stroke="#8c959f" stroke-width="1.25">
+    <rect x="24" y="88" width="128" height="72" rx="8"/>
+    <rect x="170" y="88" width="128" height="72" rx="8"/>
+  </g>
+  <g fill="none" stroke="#8c959f" stroke-width="1.25" stroke-dasharray="4 4">
+    <rect x="316" y="88" width="128" height="72" rx="8"/>
+    <rect x="462" y="88" width="128" height="72" rx="8"/>
+    <rect x="608" y="88" width="128" height="72" rx="8"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="88" y="112" font-weight="700" fill="#1f2328">BootROM</text><text x="88" y="130" font-size="11.5" fill="#59636e">in the chip</text>
+    <text x="234" y="112" font-weight="700" fill="#1f2328">BL2</text><text x="234" y="130" font-size="11.5" fill="#59636e">eMMC boot0</text><text x="234" y="146" font-size="11.5" fill="#59636e">8 lines, 52 MHz</text>
+    <text x="380" y="112" font-weight="700" fill="#8c959f">U-Boot</text><text x="380" y="130" font-size="11.5" fill="#8c959f">eMMC partition</text>
+    <text x="526" y="112" font-weight="700" fill="#8c959f">UniFi kernel</text><text x="526" y="130" font-size="11.5" fill="#8c959f">eMMC kernel0/1</text>
+    <text x="672" y="112" font-weight="700" fill="#8c959f">UniFi</text><text x="672" y="130" font-size="11.5" fill="#8c959f">never reached</text>
+  </g>
+  <g fill="none" stroke-width="1.25">
+    <path d="M154 124H168" stroke="#8c959f" marker-end="url(#a)"/>
+    <path d="M300 124H314" stroke="#cf222e" marker-end="url(#r)"/>
+    <path d="M446 124H460" stroke="#8c959f" marker-end="url(#a)"/>
+    <path d="M592 124H606" stroke="#8c959f" marker-end="url(#a)"/>
+    <path d="M303 119l8 10m0 -10l-8 10" stroke="#cf222e" stroke-width="2"/>
+  </g>
+  <text x="325" y="184" text-anchor="middle" font-size="11.5" fill="#cf222e">CRC errors reading U-Boot: boot stops here</text>
+
+  <text x="24" y="222" font-weight="700" fill="#1f2328">Fixed boot: every eMMC read is narrow and slow</text>
+  <g stroke-width="1.25">
+    <rect x="24" y="234" width="128" height="72" rx="8" fill="none" stroke="#8c959f"/>
+    <rect x="170" y="234" width="128" height="72" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="2"/>
+    <rect x="316" y="234" width="128" height="72" rx="8" fill="none" stroke="#8c959f"/>
+    <rect x="462" y="234" width="128" height="72" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="2"/>
+    <rect x="608" y="234" width="128" height="72" rx="8" fill="none" stroke="#8c959f"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="88" y="258" font-weight="700" fill="#1f2328">BootROM</text><text x="88" y="276" font-size="11.5" fill="#59636e">in the chip</text>
+    <text x="234" y="258" font-weight="700" fill="#1f2328">BL2 (replaced)</text><text x="234" y="276" font-size="11.5" fill="#1f2328">eMMC boot0</text><text x="234" y="292" font-size="11.5" fill="#1f2328">1 line, 400 kHz</text>
+    <text x="380" y="258" font-weight="700" fill="#1f2328">U-Boot</text><text x="380" y="276" font-size="11.5" fill="#59636e">unchanged</text><text x="380" y="292" font-size="11.5" fill="#59636e">runs bootcmd_real</text>
+    <text x="526" y="258" font-weight="700" fill="#1f2328">UniFi kernel</text><text x="526" y="276" font-size="11.5" fill="#1f2328">SPI flash @ 1 MB</text><text x="526" y="292" font-size="11.5" fill="#1f2328">updates blocked</text>
+    <text x="672" y="258" font-weight="700" fill="#1f2328">UniFi 6.7.54</text><text x="672" y="276" font-size="11.5" fill="#59636e">eMMC: 1 line</text><text x="672" y="292" font-size="11.5" fill="#59636e">25 or 5 MHz</text>
+  </g>
+  <g fill="none" stroke="#8c959f" stroke-width="1.25">
+    <path d="M154 270H168" marker-end="url(#a)"/>
+    <path d="M300 270H314" marker-end="url(#a)"/>
+    <path d="M446 270H460" marker-end="url(#a)"/>
+    <path d="M592 270H606" marker-end="url(#a)"/>
+  </g>
+  <text x="24" y="328" font-size="11.5" fill="#59636e">Blue boxes are what the tool changes. Ubiquiti's U-Boot cannot read the faulty eMMC, so the kernel moves to the board's 16 MB SPI flash.</text>
+</svg>

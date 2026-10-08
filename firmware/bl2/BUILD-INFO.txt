@@ -1,0 +1,9 @@
+Source: github.com/sam-413/Bricked-U6Plus-eMMC-Workaround @ 6cc1631 (TF-A, mtk-openwrt mtksoc branch)
+Common settings: PLAT=mt7981 BOARD_BGA=1 DRAM DDR3 at the default speed
+
+bl2-ram-uartdl.bin : BOOT_DEVICE=ram RAM_BOOT_UART_DL=1 (loaded over UART by mtk_uartboot)
+bl2-emmc-x1        : BOOT_DEVICE=emmc, bl2_dev_mmc.c .bus_width = MMC_BUS_WIDTH_1, 25 MHz bus clock
+bl2-emmc-x1-400k   : as bl2-emmc-x1, bus clock left at 400 kHz (mtk-sd.c DEFAULT_CLK_FREQ 400000)
+
+Hardware: bl2-ram-uartdl used on every run (2 units); bl2-emmc-x1 runs unit 1;
+bl2-emmc-x1-400k runs unit 2 and is the tool's default.

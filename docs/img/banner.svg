@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 220" width="960" height="220" font-family="Segoe UI, Helvetica, Arial, sans-serif" role="img" aria-label="U6+ eMMC Recovery: bring bricked UniFi U6+ access points back">
+  <title>U6+ eMMC Recovery</title>
+  <rect width="960" height="220" rx="18" fill="#0d1117"/>
+  <!-- access point disc -->
+  <circle cx="150" cy="110" r="74" fill="#f6f8fa"/>
+  <circle cx="150" cy="110" r="74" fill="none" stroke="#d0d7de" stroke-width="2"/>
+  <circle cx="150" cy="110" r="44" fill="none" stroke="#e5e7eb" stroke-width="2"/>
+  <circle cx="150" cy="110" r="9" fill="#2f81f7"/>
+  <circle cx="150" cy="110" r="18" fill="none" stroke="#2f81f7" stroke-width="3" opacity="0.55"/>
+  <circle cx="150" cy="110" r="28" fill="none" stroke="#2f81f7" stroke-width="2" opacity="0.25"/>
+  <!-- eMMC "one lane" motif -->
+  <g transform="translate(262 78)">
+    <rect width="56" height="64" rx="6" fill="#161b22" stroke="#30363d"/>
+    <text x="28" y="38" font-size="12" font-weight="700" fill="#8b949e" text-anchor="middle">eMMC</text>
+    <path d="M56 16H74 M56 24H74 M56 32H74 M56 40H74 M56 48H74" stroke="#30363d" stroke-width="2"/>
+    <path d="M56 32H74" stroke="#3fb950" stroke-width="3"/>
+  </g>
+  <text x="372" y="96" font-size="44" font-weight="800" fill="#f0f6fc">U6+ eMMC Recovery</text>
+  <text x="374" y="134" font-size="18" fill="#8b949e">Bring bricked UniFi U6+ access points back to life.</text>
+  <text x="374" y="164" font-size="15" fill="#3fb950">One cable · One click · One power-on</text>
+</svg>

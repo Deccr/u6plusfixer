@@ -1,0 +1,12 @@
+# Built or downloaded by Prepare.bat: never commit (contains Ubiquiti firmware)
+/downloads/
+/images/
+/bin/
+/SHA256SUMS.txt
+
+# Per-unit output of the recovery tool (contains device backups)
+/runs/
+/backups/
+
+__pycache__/
+*.pyc
