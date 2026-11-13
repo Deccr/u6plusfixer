@@ -1,6 +1,9 @@
+# Normalize text files to LF in Git
+* text=auto eol=lf
 # Windows scripts must keep CRLF line endings when cloned on any OS
 *.bat  text eol=crlf
 *.ps1  text eol=crlf
+*.cmd  text eol=crlf
 # Boot loader images are binary
 *.bin  binary
 *.img  binary

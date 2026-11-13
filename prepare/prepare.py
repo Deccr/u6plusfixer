@@ -24,9 +24,11 @@ import argparse
 import hashlib
 import lzma
 import os
+import platform
 import shutil
 import struct
 import sys
+import tarfile
 import urllib.request
 import zlib
 
@@ -34,6 +36,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from u6lib import cpio, fdt  # noqa: E402
+
+IS_WINDOWS = platform.system() == 'Windows'
 
 DOWNLOADS = {
     'unifi': {
@@ -48,12 +52,23 @@ DOWNLOADS = {
         'sha256': '6b9b4e1386e62f06dbab71c294c3013e362b1185805071e2e0bfffb66bc886e6',
     },
     'mtk_uartboot': {
-        'url': 'https://github.com/981213/mtk_uartboot/releases/download/v0.1.1/mtk_uartboot-v0.1.1-x86_64-pc-windows-msvc.zip',
-        'file': 'mtk_uartboot-v0.1.1-x86_64-pc-windows-msvc.zip',
-        'sha256': None,   # GitHub publishes no checksum; the exe inside is verified instead (MTK_UARTBOOT_EXE_SHA256),
+        'url': (
+            'https://github.com/981213/mtk_uartboot/releases/download/v0.1.1/'
+            'mtk_uartboot-v0.1.1-x86_64-pc-windows-msvc.zip'
+            if IS_WINDOWS else
+            'https://github.com/981213/mtk_uartboot/releases/download/v0.1.1/'
+            'mtk_uartboot-v0.1.1-x86_64-unknown-linux-gnu.tar.gz'
+        ),
+        'file': (
+            'mtk_uartboot-v0.1.1-x86_64-pc-windows-msvc.zip'
+            if IS_WINDOWS else
+            'mtk_uartboot-v0.1.1-x86_64-unknown-linux-gnu.tar.gz'
+        ),
+        'sha256': None,   # GitHub publishes no checksum; the binary inside is verified instead
     },
 }
 MTK_UARTBOOT_EXE_SHA256 = 'e9d6b2b3ffef420170589931c6232139f70dfdc11706521f08333e889ad9cb69'
+MTK_UARTBOOT_LINUX_SHA256 = '1bc689d771bd92ffcad30c75234cd2c74fea2482f06a4c2e9884965d5ce6e2ea'
 
 # Builds known to work on real units. Other Python/liblzma versions may compress the patched
 # kernel slightly differently; such builds are verified structurally instead.
@@ -98,11 +113,17 @@ def fetch(key, cache, offline):
     d = DOWNLOADS[key]
     path = os.path.join(cache, d['file'])
     if key == 'mtk_uartboot':
-        # A bare, already-verified mtk_uartboot.exe in the cache is accepted too.
-        exe = os.path.join(cache, 'mtk_uartboot.exe')
-        if os.path.exists(exe) and sha256(exe) == MTK_UARTBOOT_EXE_SHA256:
-            say('  [cached] mtk_uartboot.exe')
-            return exe
+        # A bare, already-verified binary in the cache is accepted too.
+        if IS_WINDOWS:
+            exe = os.path.join(cache, 'mtk_uartboot.exe')
+            if os.path.exists(exe) and sha256(exe) == MTK_UARTBOOT_EXE_SHA256:
+                say('  [cached] mtk_uartboot.exe')
+                return exe
+        else:
+            exe = os.path.join(cache, 'mtk_uartboot')
+            if os.path.exists(exe) and sha256(exe) == MTK_UARTBOOT_LINUX_SHA256:
+                say('  [cached] mtk_uartboot')
+                return exe
     if os.path.exists(path) and (d['sha256'] is None or sha256(path) == d['sha256']):
         say('  [cached] %s' % d['file'])
         return path
@@ -296,23 +317,39 @@ def main():
             lines.append('%s  %s/%s' % (sha256(os.path.join(ROOT, sub, name)), sub, name))
     with open(os.path.join(ROOT, 'SHA256SUMS.txt'), 'w', newline='\n') as f:
         f.write('\n'.join(lines) + '\n')
-    say('\nDone. Start the recovery tool with U6Plus-Fixer.bat')
+    if IS_WINDOWS:
+        say('\nDone. Start the recovery tool with U6Plus-Fixer.bat')
+    else:
+        say('\nDone. Start the recovery tool with: python3 u6plus_fixer.py --mode Fix')
 
 
 def install_mtk_uartboot(src, out_bin):
-    dst = os.path.join(out_bin, 'mtk_uartboot.exe')
+    if IS_WINDOWS:
+        dst = os.path.join(out_bin, 'mtk_uartboot.exe')
+        expected_sha256 = MTK_UARTBOOT_EXE_SHA256
+        binary_name = 'mtk_uartboot.exe'
+    else:
+        dst = os.path.join(out_bin, 'mtk_uartboot')
+        expected_sha256 = MTK_UARTBOOT_LINUX_SHA256
+        binary_name = 'mtk_uartboot'
+
     if src.lower().endswith('.zip'):
         import zipfile
         with zipfile.ZipFile(src) as z:
-            member = next(n for n in z.namelist() if n.lower().endswith('mtk_uartboot.exe'))
+            member = next(n for n in z.namelist() if n.lower().endswith(binary_name))
             with z.open(member) as s, open(dst, 'wb') as d:
+                shutil.copyfileobj(s, d)
+    elif src.lower().endswith('.tar.gz') or src.lower().endswith('.tgz'):
+        with tarfile.open(src, 'r:gz') as t:
+            member = next(m for m in t.getmembers() if m.name.endswith(binary_name))
+            with t.extractfile(member) as s, open(dst, 'wb') as d:
                 shutil.copyfileobj(s, d)
     else:
         shutil.copyfile(src, dst)
     got = sha256(dst)
-    if got != MTK_UARTBOOT_EXE_SHA256:
-        raise SystemExit('mtk_uartboot.exe checksum mismatch: %s' % got)
-    say('    bin/mtk_uartboot.exe (v0.1.1, verified)')
+    if got != expected_sha256:
+        raise SystemExit('%s checksum mismatch: %s' % (binary_name, got))
+    say('    bin/%s (v0.1.1, verified)' % binary_name)
 
 
 if __name__ == '__main__':

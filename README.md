@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20%7C%20Linux-0078D4">
   <img alt="Device" src="https://img.shields.io/badge/device-UniFi%20U6%2B%20(UAPL6)-1f6feb">
   <img alt="Firmware" src="https://img.shields.io/badge/UniFi-6.7.54-2ea043">
   <img alt="Python" src="https://img.shields.io/badge/prepare-Python%203.8%2B-3776AB">
@@ -57,7 +57,8 @@ About 10 minutes per AP.
 | 🧷 A way onto the UART pads | The header is unpopulated: solder a 4-pin header or wires, or hold pogo pins in place, i just literally let them sit in the hole on my desk smile |
 | ⚡ PoE injector + Ethernet cable | Injector's LAN port cabled **straight to the laptop**: no switch, no router |
 | 💻 Windows 10/11 PC with both WiFi and an Ethernet Interface (or just swap between the AP and Network after prepare.bat) | Recovery tool uses built-in PowerShell and OpenSSH |
-| 🐍 Python 3.8+ | Only once, to download and build the firmware images (`Prepare.bat`) |
+| 🐧 **or** Linux PC (Debian/Ubuntu, Fedora, Arch, etc.) with Python 3.8+, `pyserial`, `ssh`, and `iproute2` | Recovery tool uses Python and native Linux tools |
+| 🐍 Python 3.8+ | Only once, to download and build the firmware images (`Prepare.bat` or `prepare.sh`)
 
 ## Wiring
 
@@ -76,10 +77,15 @@ The 4-pad row sits at the board edge, labelled **UART**. No output on the consol
 
 ## Quick start
 
-**1. Prepare the images (once per PC).** Double-click **`Prepare.bat`**. It downloads the official
+**1. Prepare the images (once per PC).**
+
+- **Windows:** Double-click **`Prepare.bat`**. It downloads the official
 UniFi 6.7.54 firmware (from Ubiquiti), the OpenWrt 25.12.5 U6+ recovery image (from OpenWrt) and
 `mtk_uartboot` (from its GitHub release), checks each against a pinned SHA-256, and builds the patched
 images locally. Nothing from Ubiquiti is stored in this repository.
+
+- **Linux:** Run **`./prepare.sh`** in a terminal. It does the same thing but downloads the Linux
+  build of `mtk_uartboot`.
 
 ```
 1. Official downloads (checked against pinned SHA-256)
@@ -92,14 +98,32 @@ images locally. Nothing from Ubiquiti is stored in this repository.
 **2. Wire up.** Open the AP, connect RX / TX / GND as above, cable the PoE injector's LAN port to the
 pc. Leave the PoE **unplugged**.
 
-**3. Fix.** Double-click **`U6Plus-Fixer.bat`**, choose **Fix a bricked unit**, press **Start**, and plug
+**3. Fix.**
+
+- **Windows:** Double-click **`U6Plus-Fixer.bat`**, choose **Fix a bricked unit**, press **Start**, and plug
 in the PoE when the banner turns yellow. Then hands off until it turns green.
+
+- **Linux GUI:** Run **`./u6plus-fixer.sh`**. Same workflow as the Windows GUI.
+
+- **Linux console:** Run **`./run-fix.sh --mode Fix --com-port /dev/ttyUSB0 --adapter eth0`**.
+  Adjust the serial port and adapter to match your system.
 
 <p align="center">
   <img src="docs/img/gui.png" alt="U6+ eMMC Recovery GUI: stage list, live log, action banner" width="820">
 </p>
 
-Prefer a console? `Run-Fix.bat [-Mode Fix|Reset] [-FactoryReset] [-Speed auto|fast|slow]`.
+**Console options (all platforms):**
+```bash
+# Linux
+./run-fix.sh --mode Fix --com-port /dev/ttyUSB0 --adapter eth0
+./run-fix.sh --mode Reset --skip-backup
+./run-fix.sh --mode Fix --speed slow
+
+# Windows
+Run-Fix.bat -Mode Fix -ComPort COM5 -Adapter "Ethernet"
+Run-Fix.bat -Mode Reset -SkipBackup
+Run-Fix.bat -Mode Fix -Speed slow
+```
 
 ## What it does
 
@@ -155,13 +179,16 @@ Tested on two failed U6+ units (Kingston and Samsung eMMC):
 
 | Message | Fix |
 | --- | --- |
-| *images have not been prepared* | Run `Prepare.bat` (needs Python 3 and internet) |
-| *Serial port ... does not exist / is in use* | Pick the right COM port; close PuTTY or any serial terminal |
+| *images have not been prepared* | Run `Prepare.bat` (Windows) or `./prepare.sh` (Linux). Needs Python 3 and internet. |
+| *Serial port ... does not exist / is in use* | Pick the right port (`COM5` on Windows, `/dev/ttyUSB0` on Linux); close PuTTY, minicom, or any serial terminal |
 | *connected to a network* | The Ethernet cable runs to a LAN. Cable the injector straight to the laptop or device: the recovery system runs a DHCP server |
 | *No response from the AP* | Check wiring, swap RX/TX, make sure the AP was unpowered at Start |
 | *not reliable even at 5 MHz* / *boot loader could not read the eMMC on its own* | This unit's eMMC link is too far gone for this method, in other words, ya cooked. |
 | *Unexpected eMMC partition layout* | Not a stock U6+ layout. Nothing was written |
-| Anything else | Open an issue with the `runs\<time>\` folder (`fix.log`, `console.log`) |
+| *pyserial is required* (Linux) | `pip3 install pyserial` |
+| *tkinter is required* (Linux GUI) | `sudo apt install python3-tk` (Debian/Ubuntu) or equivalent for your distro |
+| *ssh not found* (Linux) | Install OpenSSH client: `sudo apt install openssh-client` |
+| Anything else | Open an issue with the `runs/<time>/` folder (`fix.log`, `console.log`) |
 
 ## Why U6+ units fail
 
@@ -199,8 +226,9 @@ confirmed root cause.
   `/signature` is removed from U-Boot's control DT.
 - The **recovery system** is OpenWrt 25.12.5's own U6+ initramfs with the same 1-bit patch and the whole
   SPI NOR exposed read-only for backup.
-- Files reach U-Boot with its `tftpsrv` (the laptop pushes). Windows Firewall only allows the reply from
-  U-Boot's random source port because the tool first sends one packet to every port in 1024–4095.
+- Files reach U-Boot with its `tftpsrv` (the laptop pushes). On Windows, the tool primes every port in
+  1024–4095 because Windows Firewall only allows replies from ports the PC has sent to first. On Linux
+  this is not needed.
 
 </details>
 
@@ -222,16 +250,21 @@ confirmed root cause.
 ## Repository layout
 
 ```
-Prepare.bat              download + build the images (once per PC)
-U6Plus-Fixer.bat         GUI
-Run-Fix.bat              console
-Fix-U6Plus.ps1           recovery engine
-U6Plus-Fixer.ps1         GUI (WinForms)
-prepare/prepare.py       downloader / image builder (standard library only)
+Prepare.bat              download + build the images (Windows, once per PC)
+U6Plus-Fixer.bat         GUI launcher (Windows)
+Run-Fix.bat              console launcher (Windows)
+Fix-U6Plus.ps1           recovery engine (Windows PowerShell)
+U6Plus-Fixer.ps1         GUI (Windows WinForms)
+prepare.sh               download + build the images (Linux, once per PC)
+u6plus-fixer.sh          GUI launcher (Linux)
+run-fix.sh               console launcher (Linux)
+u6plus_fixer.py          recovery engine (Linux Python)
+u6plus_fixer_gui.py      GUI (Linux tkinter)
+prepare/prepare.py       downloader / image builder (standard library only, cross-platform)
 prepare/u6lib/           device-tree and cpio helpers
 firmware/bl2/            1-bit BL2 boot loaders (BSD-3-Clause) + provenance
 docs/img/                diagrams
-images/  bin/            built by Prepare.bat (git-ignored, never commit)
+images/  bin/            built by prepare (git-ignored, never commit)
 runs/  backups/          per-run logs and per-unit backups (git-ignored)
 ```
 
