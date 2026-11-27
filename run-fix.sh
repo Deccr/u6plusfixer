@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # run-fix.sh - console version of the U6+ eMMC recovery tool.
-# Usage: ./run-fix.sh [--mode Fix|Reset|Restore] [--com-port /dev/ttyUSB0] [--adapter eth0]
+# Usage: ./run-fix.sh [--mode Fix|Reset|Restore|RepairFIP] [--com-port /dev/ttyUSB0] [--adapter eth0]
 #                     [--factory-reset] [--skip-backup] [--speed auto|fast|slow]
-#                     [--backup-dir backups/MAC-YYYYMMDD-HHMMSS]
+#                     [--backup-dir backups/MAC-YYYYMMDD-HHMMSS] [--repair-fip]
 #
 # Examples:
 #   ./run-fix.sh --mode Fix --com-port /dev/ttyUSB0 --adapter eth0
 #   ./run-fix.sh --mode Reset --skip-backup
 #   ./run-fix.sh --mode Fix --speed slow
+#   ./run-fix.sh --mode Fix --repair-fip
+#   ./run-fix.sh --mode RepairFIP --com-port /dev/ttyUSB0 --adapter eth0
 #   ./run-fix.sh --mode Restore --backup-dir backups/AABBCCDDEEFF-20240101-120000
 
 set -e

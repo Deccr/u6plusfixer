@@ -4,16 +4,22 @@ u6plus_fixer.py - Linux recovery engine for UniFi U6+ (UAPL6, MT7981) units bric
 Port of Fix-U6Plus.ps1 to Python/Linux.
 
 Modes
-  Fix      Make a bricked unit boot UniFi 6.7.54 on its own: 1-bit eMMC boot loader in boot0, patched
-           UniFi kernel (1-bit eMMC, firmware updates blocked) in SPI flash, U-Boot bootcmd_real.
-  Reset    Factory-reset a unit that was already fixed (wipes the UniFi config partition).
-  Restore  Revert a fixed unit to its pre-fix state using a backup from backups/.
+  Fix        Make a bricked unit boot UniFi 6.7.54 on its own: 1-bit eMMC boot loader in boot0, patched
+             UniFi kernel (1-bit eMMC, firmware updates blocked) in SPI flash, U-Boot bootcmd_real.
+  Reset      Factory-reset a unit that was already fixed (wipes the UniFi config partition).
+  Restore    Revert a fixed unit to its pre-fix state using a backup from backups/.
+  RepairFIP  Overwrite only the eMMC U-Boot partition with the stock FIP. Use when the FIP is
+             corrupted but the rest of the device is fine.
+
+Options
+  --repair-fip   Force rewriting the eMMC U-Boot partition with the stock FIP even if the header looks
+                 valid. Use this when the FIP is silently corrupted (Fix mode only).
 
 Usage:
-  python3 u6plus_fixer.py [-h] [--mode {Fix,Reset,Restore}] [--com-port /dev/ttyUSB0]
+  python3 u6plus_fixer.py [-h] [--mode {Fix,Reset,Restore,RepairFIP}] [--com-port /dev/ttyUSB0]
                           [--adapter eth0] [--factory-reset] [--skip-backup]
-                          [--speed {auto,fast,slow}] [--backup-dir BACKUP_DIR] [--gui]
-                          [--test-soft-reboot]
+                          [--speed {auto,fast,slow}] [--backup-dir BACKUP_DIR]
+                          [--repair-fip] [--gui] [--test-soft-reboot]
 
 Dependencies: Python 3.8+, pyserial
 """
@@ -100,6 +106,7 @@ class U6PlusFixer:
         self.factory_reset = args.factory_reset
         self.skip_backup = args.skip_backup
         self.backup_dir = args.backup_dir
+        self.repair_fip = args.repair_fip
         self.speed = args.speed
         self.gui = args.gui
         self.test_soft_reboot = args.test_soft_reboot
@@ -795,6 +802,11 @@ class U6PlusFixer:
                 "##STAGES Pre-flight checks|Reach U-Boot|Boot OpenWrt in RAM|"
                 "Restore eMMC from backup|Restore SPI flash from backup|Verify restored boot behavior"
             )
+        elif self.mode == "RepairFIP":
+            self.emit(
+                "##STAGES Pre-flight checks|Reach U-Boot|Boot OpenWrt in RAM|"
+                "Write stock FIP to eMMC|Test boot"
+            )
 
         if self.mode == "Restore" and not self.backup_dir:
             self.fail("Restore mode requires --backup-dir. Use: --backup-dir backups/MAC-YYYYMMDD-HHMMSS")
@@ -877,6 +889,10 @@ class U6PlusFixer:
         else:
             self.stage(3, "Boot OpenWrt in RAM")
         self.boot_openwrt(PROFILES[first])
+
+        if self.mode == "RepairFIP":
+            self._do_repair_fip()
+            return
 
         if first == "slow":
             if self.test_emmc(PROFILES["slow"]["test_mib"]):
@@ -1001,7 +1017,9 @@ class U6PlusFixer:
 
         # ------------------------------------------------- eMMC writes
         self.stage(5, "Write boot loader to the eMMC")
-        repair_fip = (not self.fip_ok) or (self.loader == "ramfip")
+        repair_fip = self.repair_fip or (not self.fip_ok) or (self.loader == "ramfip")
+        if self.repair_fip and self.fip_ok:
+            self.log("  --repair-fip requested: U-Boot partition will be rewritten regardless of header")
         self.ssh_upload(self.img / f"{BL2_EMMC}.img", "/tmp/bl2.img")
         if prof["write_kernel0"]:
             self.ssh_upload(self.img / "unifi-6.7.54-kernel0-original.itb", "/tmp/kernel0.itb")
@@ -1144,6 +1162,79 @@ class U6PlusFixer:
         self.ser_read()
         mark = len(self._console_buf)
         self.ssh_run("reboot")
+
+    # ------------------------------------------------------------------ repair FIP
+    def _do_repair_fip(self) -> None:
+        self.check_layout()
+        mac = self.ssh_run("cat /sys/class/net/eth0/address").replace(":", "").upper()
+        if not re.match(r"^[0-9A-F]{12}$", mac):
+            raise RuntimeError(f"Could not read the unit's MAC address ({mac})")
+        self.log(f"  unit MAC: {mac}")
+        self.emit(f"##UNIT {mac}")
+
+        self.stage(4, "Write stock FIP to eMMC")
+        if not self.skip_backup:
+            bdir = self.root / "backups" / f"{mac}-{self.stamp}-repairfip"
+            bdir.mkdir(parents=True, exist_ok=True)
+            self.ssh_backup("emmc-p4-u-boot-pre-repair.bin", "dd if=/dev/mmcblk0p4 bs=512 2>/dev/null", bdir)
+            self.log(f"  backup in {bdir}")
+
+        self.ssh_upload(self.img / "u6plus-stock-fip-6.7.54.bin", "/tmp/fip.bin")
+        sh = textwrap.dedent(
+            """\
+            set -e
+            part() { for d in /sys/block/mmcblk0/mmcblk0p*; do grep -q "^PARTNAME=$1$" $d/uevent && { echo /dev/$(basename $d); return 0; }; done; return 1; }
+            U=$(part u-boot)
+            [ "$U" = /dev/mmcblk0p4 ] || { echo "LAYOUT-MISMATCH $U"; exit 1; }
+            verify() { w=$(sha256sum "$1" | cut -d" " -f1); g=$(head -c "$(wc -c < "$1")" "$2" | sha256sum | cut -d" " -f1); [ "$w" = "$g" ] && echo "VERIFY-OK $2" || { echo "VERIFY-FAIL $2"; exit 1; }; }
+            dd if=/tmp/fip.bin of=$U bs=512 2>/dev/null; sync; echo 3 > /proc/sys/vm/drop_caches; verify /tmp/fip.bin $U
+            n=$(dmesg | grep -iE "msdc|mmc0" | grep -viE "cmd=(52|8|5|55) " | grep -ciE "error|timeout|crc" || true); echo "EMMC-ERRORS $n"
+            echo FIP-REPAIR-OK
+            """
+        )
+        res = self.ssh_run_file(sh, "")
+        for line in res:
+            self.log(f"  {line}")
+        txt = "\n".join(res)
+        if "FIP-REPAIR-OK" not in txt:
+            raise RuntimeError("FIP repair failed (see above)")
+        m = re.search(r"EMMC-ERRORS ([1-9]\d*)", txt)
+        if m:
+            self.warn(f"Linux logged {m.group(1)} eMMC errors during the write (write verified OK)")
+
+        self.stage(5, "Test boot")
+        self.ser_read()
+        mark = len(self._console_buf)
+        self.ssh_run("reboot")
+        o = self.ser_wait(r"Please press Enter to activate this console|login:|ubnt boot|MT7981#", 300)
+        if o is None:
+            boot = self._console_buf[mark:].decode("utf-8", errors="replace")
+            if re.search(r"Failed to load image|FIP boot source initialization failed", boot):
+                raise RuntimeError("The unit's boot loader could not read the eMMC on its own. The FIP repair did not help.")
+            raise RuntimeError("UniFi did not finish booting")
+        time.sleep(5)
+        self._port.write(b"\r")
+        o = self.ser_wait(r"login:", 30)
+        boot = self._console_buf[mark:].decode("utf-8", errors="replace")
+        if o is None:
+            raise RuntimeError("UniFi did not show its login prompt")
+        crc = len([
+            m for m in re.finditer(r"(?im)^.*(msdc|mmc0).*(error|crc|timeout).*$", boot)
+            if not re.search(r"cmd=(52|8|5|55) ", m.group(0))
+        ])
+        if crc > 0:
+            raise RuntimeError(f"eMMC reported {crc} errors during boot")
+        hostname_match = re.search(r"(\S+) login:", boot)
+        hostname = hostname_match.group(1) if hostname_match else "unknown"
+        self.log(f"  UniFi booted unattended (prompt '{hostname} login:'), eMMC errors: 0")
+
+        self.emit(f"##STAGE {self.stage_no} OK")
+        self.ser_close()
+        self.stop_loader()
+        self.log("")
+        self.log("SUCCESS: FIP repaired. The unit should now boot normally.", Colors.GREEN)
+        self.log(f"Logs: {self.run_dir}", Colors.GREEN)
+        self.emit("##RESULT SUCCESS")
 
     # ------------------------------------------------------------------ restore
     def _validate_backup(self, bdir: pathlib.Path) -> None:
@@ -1436,17 +1527,20 @@ def main():
               python3 u6plus_fixer.py --mode Fix --com-port /dev/ttyUSB0 --adapter eth0
               python3 u6plus_fixer.py --mode Reset --skip-backup
               python3 u6plus_fixer.py --mode Fix --speed slow
+              python3 u6plus_fixer.py --mode Fix --repair-fip
+              python3 u6plus_fixer.py --mode RepairFIP --com-port /dev/ttyUSB0 --adapter eth0
               python3 u6plus_fixer.py --mode Restore --backup-dir backups/AABBCCDDEEFF-20240101-120000
             """
         ),
     )
-    ap.add_argument("--mode", choices=["Fix", "Reset", "Restore"], default="Fix", help="Recovery mode (default: Fix)")
+    ap.add_argument("--mode", choices=["Fix", "Reset", "Restore", "RepairFIP"], default="Fix", help="Recovery mode (default: Fix)")
     ap.add_argument("--com-port", default=None, help="Serial port (e.g. /dev/ttyUSB0)")
     ap.add_argument("--adapter", default=None, help="Network adapter (e.g. eth0)")
     ap.add_argument("--factory-reset", action="store_true", help="Also wipe UniFi settings (Fix mode)")
     ap.add_argument("--skip-backup", action="store_true", help="Skip backup (not recommended)")
     ap.add_argument("--speed", choices=["auto", "fast", "slow"], default="auto", help="eMMC speed (default: auto)")
     ap.add_argument("--backup-dir", default=None, help="Backup directory for Restore mode (e.g. backups/MAC-YYYYMMDD-HHMMSS)")
+    ap.add_argument("--repair-fip", action="store_true", help="Force rewriting the eMMC U-Boot partition with the stock FIP even if the header looks valid (Fix mode)")
     ap.add_argument("--gui", action="store_true", help="Emit machine-readable progress lines")
     ap.add_argument("--test-soft-reboot", action="store_true", help="Test the software reboot path to slow profile")
     args = ap.parse_args()

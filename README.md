@@ -113,6 +113,11 @@ in the PoE when the banner turns yellow. Then hands off until it turns green.
   original state with **`./run-fix.sh --mode Restore --backup-dir backups/<MAC>-<timestamp>`**.
   See [Restoring a fixed unit](#restoring-a-fixed-unit) for details.
 
+- **Repair FIP (Linux only):** If the unit fails to boot because the FIP (U-Boot partition) is corrupted
+  but everything else is intact, run **`./run-fix.sh --mode RepairFIP --com-port /dev/ttyUSB0 --adapter eth0`**.
+  This overwrites only the U-Boot partition with the stock 6.7.54 FIP and does not modify boot0,
+  kernel0, or SPI flash.
+
 <p align="center">
   <img src="docs/img/gui.png" alt="U6+ eMMC Recovery GUI: stage list, live log, action banner" width="820">
 </p>
@@ -123,6 +128,8 @@ in the PoE when the banner turns yellow. Then hands off until it turns green.
 ./run-fix.sh --mode Fix --com-port /dev/ttyUSB0 --adapter eth0
 ./run-fix.sh --mode Reset --skip-backup
 ./run-fix.sh --mode Fix --speed slow
+./run-fix.sh --mode Fix --repair-fip
+./run-fix.sh --mode RepairFIP --com-port /dev/ttyUSB0 --adapter eth0
 ./run-fix.sh --mode Restore --backup-dir backups/AABBCCDDEEFF-20240101-120000
 
 # Windows
@@ -155,6 +162,15 @@ in once).
 **Factory reset.** The reset button doesn't work on a fixed AP. Choose **Factory-reset a fixed unit** in
 the GUI (or tick *Also wipe UniFi settings* during a fix): it backs up and wipes the UniFi config, and
 the AP comes back ready to adopt.
+
+**FIP repair.** The tool checks the U-Boot partition header and only repairs it when the header is
+obviously invalid. If you suspect the FIP is silently corrupted (the header looks valid but the unit
+still fails to boot), use `--repair-fip` in Fix mode to force rewriting the U-Boot partition with the
+stock 6.7.54 FIP extracted from the firmware image.
+
+**RepairFIP mode.** If only the FIP is corrupted and the rest of the device is fine, use
+`--mode RepairFIP` to overwrite only the U-Boot partition without touching boot0, kernel0, or SPI flash.
+This is a quick targeted repair that does not apply the full eMMC workaround.
 
 ## After the fix
 
@@ -205,6 +221,7 @@ Tested on two failed U6+ units (Kingston and Samsung eMMC):
 | Re-run on an already fixed unit | ✅ |
 | Factory reset mode | ✅ settings wiped, unit boots defaults |
 | Restore mode (revert to pre-fix state) | ✅ Linux only |
+| RepairFIP mode (overwrite U-Boot partition only) | ✅ Linux only |
 | Speed fallback to 5 MHz via software reboot (no power cycle) | ✅ |
 | Unattended boot and adoption into a controller | ✅ |
 | Update block: UniFi's own upgrade routine run on the AP | ✅ refused, no reboot, boot loader unchanged |
@@ -227,6 +244,7 @@ Tested on two failed U6+ units (Kingston and Samsung eMMC):
 | *ssh not found* (Linux) | Install OpenSSH client: `sudo apt install openssh-client` |
 | *Backup directory not found* (Restore) | Check the path to the backup folder under `backups/`. It should look like `backups/AABBCCDDEEFF-20240101-120000`. |
 | *Backup is missing required files* (Restore) | The backup may be incomplete. Use a backup from a complete Fix run. |
+| *U-Boot partition header is valid but boot still fails* | The FIP may be silently corrupted. Run Fix again with `--repair-fip` to force rewriting the U-Boot partition, or use `--mode RepairFIP` for a targeted repair. |
 | Anything else | Open an issue with the `runs/<time>/` folder (`fix.log`, `console.log`) |
 
 ## Why U6+ units fail
