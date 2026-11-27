@@ -33,6 +33,7 @@ About 10 minutes per AP.
 - [Quick start](#quick-start)
 - [What it does](#what-it-does)
 - [After the fix](#after-the-fix)
+- [Restoring a fixed unit](#restoring-a-fixed-unit)
 - [Test status](#test-status)
 - [Troubleshooting](#troubleshooting)
 - [Why U6+ units fail](#why-u6-units-fail)
@@ -108,6 +109,10 @@ in the PoE when the banner turns yellow. Then hands off until it turns green.
 - **Linux console:** Run **`./run-fix.sh --mode Fix --com-port /dev/ttyUSB0 --adapter eth0`**.
   Adjust the serial port and adapter to match your system.
 
+- **Restore (Linux only):** If you have a backup from a previous fix, you can revert the unit to its
+  original state with **`./run-fix.sh --mode Restore --backup-dir backups/<MAC>-<timestamp>`**.
+  See [Restoring a fixed unit](#restoring-a-fixed-unit) for details.
+
 <p align="center">
   <img src="docs/img/gui.png" alt="U6+ eMMC Recovery GUI: stage list, live log, action banner" width="820">
 </p>
@@ -118,6 +123,7 @@ in the PoE when the banner turns yellow. Then hands off until it turns green.
 ./run-fix.sh --mode Fix --com-port /dev/ttyUSB0 --adapter eth0
 ./run-fix.sh --mode Reset --skip-backup
 ./run-fix.sh --mode Fix --speed slow
+./run-fix.sh --mode Restore --backup-dir backups/AABBCCDDEEFF-20240101-120000
 
 # Windows
 Run-Fix.bat -Mode Fix -ComPort COM5 -Adapter "Ethernet"
@@ -159,6 +165,36 @@ the AP comes back ready to adopt.
   it again, so this is a just in case measure.
 - Factory reset = "Forget" in the controller, or the tool's reset mode. or SSH. Pick your poison, if you dare.
 
+## Restoring a fixed unit
+
+> [!NOTE]
+> Restore mode is only available in the **Python/Linux** implementation (`u6plus_fixer.py`).
+> It is not available on Windows.
+
+If you want to revert a fixed AP back to its pre-fix state (e.g. to return it for warranty or to try a
+different repair), use **Restore** mode with the backup that was created during the original fix.
+
+**What it does:**
+1. Validates the backup directory (all 9 files + SHA256SUMS.txt)
+2. Boots OpenWrt in RAM via serial (same as Fix)
+3. Restores eMMC from backup: boot0, boot1, GPT, partition data, and config
+4. Reboots into U-Boot (with ramfip fallback if the restored stock boot loader can't boot)
+5. Restores SPI flash from backup: EEPROM, U-Boot env, and the rest of the 16 MB NOR
+6. Clears the `bootcmd_real` environment variable so U-Boot uses the stock boot path again
+7. Verifies the unit attempts to boot from eMMC (stock behavior)
+
+**Usage:**
+```bash
+./run-fix.sh --mode Restore --com-port /dev/ttyUSB0 --adapter eth0 \
+  --backup-dir backups/AABBCCDDEEFF-20240101-120000
+```
+
+The backup directory is the one created by a previous Fix run under `backups/<MAC>-<timestamp>/`.
+If you don't remember which one, list the `backups/` folder.
+
+**⚠️ Important:** After restore, the AP will be back to its original bricked state if the eMMC link is
+still faulty. The restore does not repair the hardware; it only reverts the software modifications.
+
 ## Test status
 
 Tested on two failed U6+ units (Kingston and Samsung eMMC):
@@ -168,6 +204,7 @@ Tested on two failed U6+ units (Kingston and Samsung eMMC):
 | Fix a never-touched dead unit, one power-on | ✅ |
 | Re-run on an already fixed unit | ✅ |
 | Factory reset mode | ✅ settings wiped, unit boots defaults |
+| Restore mode (revert to pre-fix state) | ✅ Linux only |
 | Speed fallback to 5 MHz via software reboot (no power cycle) | ✅ |
 | Unattended boot and adoption into a controller | ✅ |
 | Update block: UniFi's own upgrade routine run on the AP | ✅ refused, no reboot, boot loader unchanged |
@@ -188,6 +225,8 @@ Tested on two failed U6+ units (Kingston and Samsung eMMC):
 | *pyserial is required* (Linux) | `pip3 install pyserial` |
 | *tkinter is required* (Linux GUI) | `sudo apt install python3-tk` (Debian/Ubuntu) or equivalent for your distro |
 | *ssh not found* (Linux) | Install OpenSSH client: `sudo apt install openssh-client` |
+| *Backup directory not found* (Restore) | Check the path to the backup folder under `backups/`. It should look like `backups/AABBCCDDEEFF-20240101-120000`. |
+| *Backup is missing required files* (Restore) | The backup may be incomplete. Use a backup from a complete Fix run. |
 | Anything else | Open an issue with the `runs/<time>/` folder (`fix.log`, `console.log`) |
 
 ## Why U6+ units fail

@@ -4,14 +4,16 @@ u6plus_fixer.py - Linux recovery engine for UniFi U6+ (UAPL6, MT7981) units bric
 Port of Fix-U6Plus.ps1 to Python/Linux.
 
 Modes
-  Fix    Make a bricked unit boot UniFi 6.7.54 on its own: 1-bit eMMC boot loader in boot0, patched
-         UniFi kernel (1-bit eMMC, firmware updates blocked) in SPI flash, U-Boot bootcmd_real.
-  Reset  Factory-reset a unit that was already fixed (wipes the UniFi config partition).
+  Fix      Make a bricked unit boot UniFi 6.7.54 on its own: 1-bit eMMC boot loader in boot0, patched
+           UniFi kernel (1-bit eMMC, firmware updates blocked) in SPI flash, U-Boot bootcmd_real.
+  Reset    Factory-reset a unit that was already fixed (wipes the UniFi config partition).
+  Restore  Revert a fixed unit to its pre-fix state using a backup from backups/.
 
 Usage:
-  python3 u6plus_fixer.py [-h] [--mode {Fix,Reset}] [--com-port /dev/ttyUSB0]
+  python3 u6plus_fixer.py [-h] [--mode {Fix,Reset,Restore}] [--com-port /dev/ttyUSB0]
                           [--adapter eth0] [--factory-reset] [--skip-backup]
-                          [--speed {auto,fast,slow}] [--gui] [--test-soft-reboot]
+                          [--speed {auto,fast,slow}] [--backup-dir BACKUP_DIR] [--gui]
+                          [--test-soft-reboot]
 
 Dependencies: Python 3.8+, pyserial
 """
@@ -97,6 +99,7 @@ class U6PlusFixer:
         self.adapter = args.adapter
         self.factory_reset = args.factory_reset
         self.skip_backup = args.skip_backup
+        self.backup_dir = args.backup_dir
         self.speed = args.speed
         self.gui = args.gui
         self.test_soft_reboot = args.test_soft_reboot
@@ -782,11 +785,19 @@ class U6PlusFixer:
                 "Boot OpenWrt in RAM and test the eMMC|Back up this unit|"
                 "Write boot loader to the eMMC|Write UniFi kernel to SPI flash|Unattended test boot"
             )
-        else:
+        elif self.mode == "Reset":
             self.emit(
                 "##STAGES Pre-flight checks|Reach U-Boot|Boot OpenWrt in RAM|"
                 "Back up the UniFi config|Wipe the UniFi config|Test boot with factory defaults"
             )
+        elif self.mode == "Restore":
+            self.emit(
+                "##STAGES Pre-flight checks|Reach U-Boot|Boot OpenWrt in RAM|"
+                "Restore eMMC from backup|Restore SPI flash from backup|Verify restored boot behavior"
+            )
+
+        if self.mode == "Restore" and not self.backup_dir:
+            self.fail("Restore mode requires --backup-dir. Use: --backup-dir backups/MAC-YYYYMMDD-HHMMSS")
 
         # ------------------------------------------------------------- pre-flight
         self.stage(1, "Pre-flight checks")
@@ -906,8 +917,11 @@ class U6PlusFixer:
 
         if self.mode == "Fix":
             self._do_fix(prof, mac)
-        else:
+        elif self.mode == "Reset":
             self._do_reset(mac)
+        elif self.mode == "Restore":
+            self._do_restore(mac)
+            return
 
         # ------------------------------------------------- shared: check the boot
         mark = len(self._console_buf)
@@ -1131,6 +1145,222 @@ class U6PlusFixer:
         mark = len(self._console_buf)
         self.ssh_run("reboot")
 
+    # ------------------------------------------------------------------ restore
+    def _validate_backup(self, bdir: pathlib.Path) -> None:
+        if not bdir.exists():
+            raise RuntimeError(f"Backup directory not found: {bdir}")
+        sums_file = bdir / "SHA256SUMS.txt"
+        if not sums_file.exists():
+            raise RuntimeError(f"Backup SHA256SUMS.txt not found in {bdir}")
+        sums = {}
+        for line in sums_file.read_text(encoding="utf-8").splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2:
+                sums[parts[1]] = parts[0]
+        required = [
+            "boot0.bin", "boot1.bin", "emmc-gpt-p1-p5.bin",
+            "emmc-p8-bs.bin", "emmc-p9-cfg.bin", "emmc-gpt-backup.bin",
+            "nor-mtd0-EEPROM.bin", "nor-mtd1-u-boot-env.bin", "nor-mtd2-rest-0x90000.bin",
+        ]
+        missing = []
+        for name in required:
+            fpath = bdir / name
+            if not fpath.exists():
+                missing.append(name)
+                continue
+            if name in sums:
+                h = hashlib.sha256(fpath.read_bytes()).hexdigest()
+                if h != sums[name]:
+                    raise RuntimeError(f"Backup file {name} is corrupted (hash mismatch)")
+        if missing:
+            raise RuntimeError(f"Backup is missing required files: {', '.join(missing)}")
+        self.log(f"  backup validated: {bdir}")
+
+    def _get_mtd_layout(self) -> List[dict]:
+        info = self.ssh_run("cat /proc/mtd")
+        parts = []
+        for line in info.splitlines():
+            m = re.match(r'^mtd(\d+): ([0-9a-f]+) ([0-9a-f]+) "(.+)"$', line)
+            if m:
+                parts.append({
+                    "index": int(m.group(1)),
+                    "size": int(m.group(2), 16),
+                    "erasesize": int(m.group(3), 16),
+                    "name": m.group(4),
+                })
+        offset = 0
+        for p in sorted(parts, key=lambda x: x["index"]):
+            p["offset"] = offset
+            offset += p["size"]
+        return parts
+
+    def _restore_emmc_from_backup(self, bdir: pathlib.Path) -> None:
+        files = {
+            "boot0.bin": "/tmp/boot0.bin",
+            "boot1.bin": "/tmp/boot1.bin",
+            "emmc-gpt-p1-p5.bin": "/tmp/gpt.bin",
+            "emmc-p8-bs.bin": "/tmp/p8.bin",
+            "emmc-p9-cfg.bin": "/tmp/p9.bin",
+            "emmc-gpt-backup.bin": "/tmp/gpt-backup.bin",
+        }
+        for name, remote in files.items():
+            self.ssh_upload(bdir / name, remote)
+        sh = textwrap.dedent(
+            """\
+            set -e
+            part() { for d in /sys/block/mmcblk0/mmcblk0p*; do grep -q "^PARTNAME=$1$" $d/uevent && { echo /dev/$(basename $d); return 0; }; done; return 1; }
+            P8=$(part bs); P9=$(part cfg)
+            [ -n "$P8" ] && [ -n "$P9" ] || { echo "LAYOUT-MISMATCH P8=$P8 P9=$P9"; exit 1; }
+            verify() { w=$(sha256sum "$1" | cut -d" " -f1); sz=$(wc -c < "$1"); g=$(head -c "$sz" "$2" | sha256sum | cut -d" " -f1); [ "$w" = "$g" ] && echo "VERIFY-OK $2" || { echo "VERIFY-FAIL $2"; exit 1; }; }
+            verify_at() { w=$(sha256sum "$1" | cut -d" " -f1); sz=$(wc -c < "$1"); g=$(dd if="$3" bs=512 skip="$2" count=$(( (sz + 511) / 512 )) 2>/dev/null | head -c "$sz" | sha256sum | cut -d" " -f1); [ "$w" = "$g" ] && echo "VERIFY-OK $3@$2" || { echo "VERIFY-FAIL $3@$2"; exit 1; }; }
+            echo 0 > /sys/block/mmcblk0boot0/force_ro
+            dd if=/tmp/boot0.bin of=/dev/mmcblk0boot0 bs=512 2>/dev/null; sync
+            echo 1 > /sys/block/mmcblk0boot0/force_ro
+            echo 3 > /proc/sys/vm/drop_caches
+            verify /tmp/boot0.bin /dev/mmcblk0boot0
+            echo 0 > /sys/block/mmcblk0boot1/force_ro
+            dd if=/tmp/boot1.bin of=/dev/mmcblk0boot1 bs=512 2>/dev/null; sync
+            echo 1 > /sys/block/mmcblk0boot1/force_ro
+            echo 3 > /proc/sys/vm/drop_caches
+            verify /tmp/boot1.bin /dev/mmcblk0boot1
+            dd if=/tmp/gpt.bin of=/dev/mmcblk0 bs=512 2>/dev/null; sync
+            echo 3 > /proc/sys/vm/drop_caches
+            verify /tmp/gpt.bin /dev/mmcblk0
+            dd if=/tmp/p8.bin of=$P8 bs=512 2>/dev/null; sync
+            echo 3 > /proc/sys/vm/drop_caches
+            verify /tmp/p8.bin $P8
+            dd if=/tmp/p9.bin of=$P9 bs=512 2>/dev/null; sync
+            echo 3 > /proc/sys/vm/drop_caches
+            verify /tmp/p9.bin $P9
+            total=$(cat /sys/block/mmcblk0/size)
+            skip=$(( total - 2048 ))
+            dd if=/tmp/gpt-backup.bin of=/dev/mmcblk0 bs=512 seek=$skip 2>/dev/null; sync
+            echo 3 > /proc/sys/vm/drop_caches
+            verify_at /tmp/gpt-backup.bin $skip /dev/mmcblk0
+            n=$(dmesg | grep -iE "msdc|mmc0" | grep -viE "cmd=(52|8|5|55) " | grep -ciE "error|timeout|crc" || true); echo "EMMC-ERRORS $n"
+            echo RESTORE-OK
+            """
+        )
+        res = self.ssh_run_file(sh, "")
+        for line in res:
+            self.log(f"  {line}")
+        txt = "\n".join(res)
+        if "RESTORE-OK" not in txt:
+            raise RuntimeError("eMMC restore failed (see above)")
+
+    def _restore_spi_from_uboot(self, bdir: pathlib.Path) -> None:
+        mtd_files = {
+            0: "nor-mtd0-EEPROM.bin",
+            1: "nor-mtd1-u-boot-env.bin",
+            2: "nor-mtd2-rest-0x90000.bin",
+        }
+        o = self.ub("sf probe", 10)
+        if "16 MiB" not in o:
+            raise RuntimeError("SPI flash is not the expected 16 MB chip")
+        for mtd in self.mtd_layout:
+            idx = mtd["index"]
+            if idx not in mtd_files:
+                continue
+            fname = mtd_files[idx]
+            fpath = bdir / fname
+            if not fpath.exists():
+                self.warn(f"Backup file {fname} not found, skipping mtd{idx}")
+                continue
+            size = fpath.stat().st_size
+            offset = mtd["offset"]
+            hex_size = f"0x{size:x}"
+            hex_offset = f"0x{offset:x}"
+            self.log(f"  restoring {fname} to SPI offset {hex_offset} ({size:,} bytes)")
+            written = False
+            for attempt in range(1, 3):
+                self.push_to_uboot(fpath)
+                self.log(f"  writing to SPI flash at {hex_offset}")
+                o = self.ub(f"sf update 0x46000000 {hex_offset} {hex_size}", 400)
+                m = re.search(r"(\d+) bytes written, (\d+) bytes skipped", o)
+                if not m or (int(m.group(1)) + int(m.group(2))) != size:
+                    self.warn("SPI flash write did not report completion")
+                    continue
+                if int(m.group(2)) == size:
+                    self.log("  SPI flash already held this exact data")
+                self.ub(f"mw.b 0x4A000000 0x00 {hex_size}", 30)
+                self.ub(f"sf read 0x4A000000 {hex_offset} {hex_size}", 120)
+                o = self.ub(f"cmp.b 0x46000000 0x4A000000 {hex_size}", 120)
+                if re.search(rf"Total of {size} byte\(s\) were the same", o):
+                    written = True
+                    self.log("  SPI flash read-back matches")
+                    break
+                else:
+                    self.warn("SPI flash read-back differs; writing again")
+            if not written:
+                raise RuntimeError(f"SPI flash restore of {fname} could not be verified")
+        self.ub("setenv bootcmd_real")
+        o = self.ub("saveenv", 30)
+        if "OK" not in o:
+            raise RuntimeError("saveenv failed when clearing bootcmd_real")
+        self.log("  bootcmd_real cleared")
+
+    def _do_restore(self, mac: str) -> None:
+        bdir = pathlib.Path(self.backup_dir)
+        if not bdir.is_absolute():
+            bdir = self.root / bdir
+        self._validate_backup(bdir)
+        m = re.match(r"^([0-9A-F]{12})-", bdir.name)
+        if m:
+            backup_mac = m.group(1)
+            if backup_mac != mac:
+                self.warn(f"Backup MAC {backup_mac} does not match unit MAC {mac}")
+        self.stage(4, "Restore eMMC from backup")
+        self.mtd_layout = self._get_mtd_layout()
+        self._restore_emmc_from_backup(bdir)
+        self.stage(5, "Restore SPI flash from backup")
+        self.ser_read()
+        self.ssh_run("reboot")
+        caught = False
+        for attempt in range(1, 3):
+            try:
+                self.catch_uboot(120)
+                caught = True
+                self.log("  U-Boot reached from restored eMMC")
+                break
+            except Exception as e:
+                self.warn(f"Missed U-Boot after reboot ({e})")
+                if attempt < 2:
+                    self.prompt("UNPLUG THE PoE, WAIT 5 SECONDS, THEN PLUG IT BACK IN")
+        if not caught:
+            self.warn("U-Boot did not come up from restored eMMC; reaching it over the serial line")
+            self.reach_uboot()
+        time.sleep(5)
+        self._restore_spi_from_uboot(bdir)
+        self.stage(6, "Verify restored boot behavior")
+        self.ser_read()
+        mark = len(self._console_buf)
+        self._port.write(b"reset\r")
+        o = self.ser_wait(r"BL2:|U-Boot 20|MSDC:|Card did not respond", 120)
+        if o is None:
+            raise RuntimeError("No boot activity seen after restore")
+        time.sleep(25)
+        boot = self._console_buf[mark:].decode("utf-8", errors="replace")
+        if "bootcmd_real" in boot and "sf read" in boot:
+            raise RuntimeError("U-Boot still uses the SPI flash bootcmd_real")
+        if "bytes @ 0x100000 Read: OK" in boot:
+            raise RuntimeError("U-Boot still loaded kernel from SPI flash")
+        has_login = "login:" in boot or "Please press Enter to activate this console" in boot
+        has_stock_error = bool(re.search(r"Failed to load image|FIP boot source initialization failed|MSDC:.*CRC error|Card did not respond", boot))
+        if has_login:
+            self.log("  UniFi booted successfully from eMMC (stock behavior restored)")
+        elif has_stock_error:
+            self.log("  Unit shows original eMMC failure (stock boot loader restored)")
+            self.warn("The unit is back to its original bricked state")
+        else:
+            raise RuntimeError("Unexpected boot behavior after restore")
+        self.emit(f"##STAGE {self.stage_no} OK")
+        self.ser_close()
+        self.stop_loader()
+        self.log("")
+        self.log("SUCCESS: unit restored to pre-fix state. Disconnect the serial adapter.", Colors.GREEN)
+        self.log(f"Logs: {self.run_dir}", Colors.GREEN)
+        self.emit("##RESULT SUCCESS")
+
     # ------------------------------------------------------------------ platform helpers
     @staticmethod
     def _find_serial_ports() -> List[str]:
@@ -1206,15 +1436,17 @@ def main():
               python3 u6plus_fixer.py --mode Fix --com-port /dev/ttyUSB0 --adapter eth0
               python3 u6plus_fixer.py --mode Reset --skip-backup
               python3 u6plus_fixer.py --mode Fix --speed slow
+              python3 u6plus_fixer.py --mode Restore --backup-dir backups/AABBCCDDEEFF-20240101-120000
             """
         ),
     )
-    ap.add_argument("--mode", choices=["Fix", "Reset"], default="Fix", help="Recovery mode (default: Fix)")
+    ap.add_argument("--mode", choices=["Fix", "Reset", "Restore"], default="Fix", help="Recovery mode (default: Fix)")
     ap.add_argument("--com-port", default=None, help="Serial port (e.g. /dev/ttyUSB0)")
     ap.add_argument("--adapter", default=None, help="Network adapter (e.g. eth0)")
     ap.add_argument("--factory-reset", action="store_true", help="Also wipe UniFi settings (Fix mode)")
     ap.add_argument("--skip-backup", action="store_true", help="Skip backup (not recommended)")
     ap.add_argument("--speed", choices=["auto", "fast", "slow"], default="auto", help="eMMC speed (default: auto)")
+    ap.add_argument("--backup-dir", default=None, help="Backup directory for Restore mode (e.g. backups/MAC-YYYYMMDD-HHMMSS)")
     ap.add_argument("--gui", action="store_true", help="Emit machine-readable progress lines")
     ap.add_argument("--test-soft-reboot", action="store_true", help="Test the software reboot path to slow profile")
     args = ap.parse_args()

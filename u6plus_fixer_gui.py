@@ -65,9 +65,10 @@ class U6PlusFixerGUI:
         self.rb_mode = tk.StringVar(value="Fix")
         ttk.Radiobutton(act_frame, text="Fix a bricked unit", variable=self.rb_mode, value="Fix").place(x=5, y=5)
         ttk.Radiobutton(act_frame, text="Factory-reset a fixed unit", variable=self.rb_mode, value="Reset").place(x=5, y=30)
+        ttk.Radiobutton(act_frame, text="Restore a fixed unit", variable=self.rb_mode, value="Restore").place(x=5, y=55)
 
         self.chk_factory = tk.BooleanVar()
-        ttk.Checkbutton(act_frame, text="Also wipe UniFi settings", variable=self.chk_factory).place(x=5, y=55)
+        ttk.Checkbutton(act_frame, text="Also wipe UniFi settings", variable=self.chk_factory).place(x=5, y=80)
 
         ttk.Label(act_frame, text="eMMC speed").place(x=230, y=5)
         self.cb_speed = ttk.Combobox(act_frame, state="readonly", width=20)
@@ -77,6 +78,11 @@ class U6PlusFixerGUI:
 
         self.chk_skip = tk.BooleanVar()
         ttk.Checkbutton(act_frame, text="Skip backup (not recommended)", variable=self.chk_skip).place(x=230, y=30)
+
+        ttk.Label(act_frame, text="Backup").place(x=230, y=55)
+        self.cb_backup = ttk.Combobox(act_frame, state="readonly", width=20)
+        self.cb_backup.place(x=320, y=55)
+        self.refresh_backups()
 
         # Buttons
         self.btn_start = tk.Button(self.root, text="Start", font=("Segoe UI", 10, "bold"), command=self.on_start)
@@ -123,6 +129,15 @@ class U6PlusFixerGUI:
         # Status bar
         self.status = tk.Label(self.root, text="Idle", bd=1, relief=tk.SUNKEN, anchor=tk.W)
         self.status.place(x=0, y=760, width=1040, height=20)
+
+    def refresh_backups(self) -> None:
+        d = self.script_dir / "backups"
+        dirs = []
+        if d.exists():
+            dirs = [str(p.relative_to(self.script_dir)) for p in sorted(d.iterdir()) if p.is_dir()]
+        self.cb_backup["values"] = dirs
+        if dirs:
+            self.cb_backup.current(0)
 
     def refresh_ports(self) -> None:
         # Serial ports
@@ -266,6 +281,12 @@ class U6PlusFixerGUI:
         ]
         if mode == "Fix" and self.chk_factory.get():
             cmd.append("--factory-reset")
+        if mode == "Restore":
+            backup = self.cb_backup.get()
+            if not backup:
+                messagebox.showwarning("U6+ Recovery", "No backup selected. Choose a backup directory.")
+                return
+            cmd.extend(["--backup-dir", backup])
         if self.chk_skip.get():
             cmd.append("--skip-backup")
 
