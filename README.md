@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20%7C%20Linux-0078D4">
   <img alt="Device" src="https://img.shields.io/badge/device-UniFi%20U6%2B%20(UAPL6)-1f6feb">
   <img alt="Firmware" src="https://img.shields.io/badge/UniFi-6.7.54-2ea043">
   <img alt="Python" src="https://img.shields.io/badge/prepare-Python%203.8%2B-3776AB">
@@ -33,9 +33,11 @@ About 10 minutes per AP.
 - [Quick start](#quick-start)
 - [What it does](#what-it-does)
 - [After the fix](#after-the-fix)
+- [Restoring a fixed unit](#restoring-a-fixed-unit)
 - [Test status](#test-status)
 - [Troubleshooting](#troubleshooting)
 - [Why U6+ units fail](#why-u6-units-fail)
+- [Reading eMMC health data](#reading-emmc-health-data)
 - [How it works](#how-it-works)
 - [Repository layout](#repository-layout)
 - [Credits and licenses](#credits-and-licenses)
@@ -57,7 +59,8 @@ About 10 minutes per AP.
 | 🧷 A way onto the UART pads | The header is unpopulated: solder a 4-pin header or wires, or hold pogo pins in place, i just literally let them sit in the hole on my desk smile |
 | ⚡ PoE injector + Ethernet cable | Injector's LAN port cabled **straight to the laptop**: no switch, no router |
 | 💻 Windows 10/11 PC with both WiFi and an Ethernet Interface (or just swap between the AP and Network after prepare.bat) | Recovery tool uses built-in PowerShell and OpenSSH |
-| 🐍 Python 3.8+ | Only once, to download and build the firmware images (`Prepare.bat`) |
+| 🐧 **or** Linux PC (Debian/Ubuntu, Fedora, Arch, etc.) with Python 3.8+, `pyserial`, `ssh`, and `iproute2` | Recovery tool uses Python and native Linux tools |
+| 🐍 Python 3.8+ | Only once, to download and build the firmware images (`Prepare.bat` or `prepare.sh`)
 
 ## Wiring
 
@@ -76,10 +79,15 @@ The 4-pad row sits at the board edge, labelled **UART**. No output on the consol
 
 ## Quick start
 
-**1. Prepare the images (once per PC).** Double-click **`Prepare.bat`**. It downloads the official
+**1. Prepare the images (once per PC).**
+
+- **Windows:** Double-click **`Prepare.bat`**. It downloads the official
 UniFi 6.7.54 firmware (from Ubiquiti), the OpenWrt 25.12.5 U6+ recovery image (from OpenWrt) and
 `mtk_uartboot` (from its GitHub release), checks each against a pinned SHA-256, and builds the patched
 images locally. Nothing from Ubiquiti is stored in this repository.
+
+- **Linux:** Run **`./prepare.sh`** in a terminal. It does the same thing but downloads the Linux
+  build of `mtk_uartboot`.
 
 ```
 1. Official downloads (checked against pinned SHA-256)
@@ -92,14 +100,44 @@ images locally. Nothing from Ubiquiti is stored in this repository.
 **2. Wire up.** Open the AP, connect RX / TX / GND as above, cable the PoE injector's LAN port to the
 pc. Leave the PoE **unplugged**.
 
-**3. Fix.** Double-click **`U6Plus-Fixer.bat`**, choose **Fix a bricked unit**, press **Start**, and plug
+**3. Fix.**
+
+- **Windows:** Double-click **`U6Plus-Fixer.bat`**, choose **Fix a bricked unit**, press **Start**, and plug
 in the PoE when the banner turns yellow. Then hands off until it turns green.
+
+- **Linux GUI:** Run **`./u6plus-fixer.sh`**. Same workflow as the Windows GUI.
+
+- **Linux console:** Run **`./run-fix.sh --mode Fix --com-port /dev/ttyUSB0 --adapter eth0`**.
+  Adjust the serial port and adapter to match your system.
+
+- **Restore (Linux only):** If you have a backup from a previous fix, you can revert the unit to its
+  original state with **`./run-fix.sh --mode Restore --backup-dir backups/<MAC>-<timestamp>`**.
+  See [Restoring a fixed unit](#restoring-a-fixed-unit) for details.
+
+- **Repair FIP (Linux only):** If the unit fails to boot because the FIP (U-Boot partition) is corrupted
+  but everything else is intact, run **`./run-fix.sh --mode RepairFIP --com-port /dev/ttyUSB0 --adapter eth0`**.
+  This overwrites only the U-Boot partition with the stock 6.7.54 FIP and does not modify boot0,
+  kernel0, or SPI flash.
 
 <p align="center">
   <img src="docs/img/gui.png" alt="U6+ eMMC Recovery GUI: stage list, live log, action banner" width="820">
 </p>
 
-Prefer a console? `Run-Fix.bat [-Mode Fix|Reset] [-FactoryReset] [-Speed auto|fast|slow]`.
+**Console options (all platforms):**
+```bash
+# Linux
+./run-fix.sh --mode Fix --com-port /dev/ttyUSB0 --adapter eth0
+./run-fix.sh --mode Reset --skip-backup
+./run-fix.sh --mode Fix --speed slow
+./run-fix.sh --mode Fix --repair-fip
+./run-fix.sh --mode RepairFIP --com-port /dev/ttyUSB0 --adapter eth0
+./run-fix.sh --mode Restore --backup-dir backups/AABBCCDDEEFF-20240101-120000
+
+# Windows
+Run-Fix.bat -Mode Fix -ComPort COM5 -Adapter "Ethernet"
+Run-Fix.bat -Mode Reset -SkipBackup
+Run-Fix.bat -Mode Fix -Speed slow
+```
 
 ## What it does
 
@@ -126,6 +164,15 @@ in once).
 the GUI (or tick *Also wipe UniFi settings* during a fix): it backs up and wipes the UniFi config, and
 the AP comes back ready to adopt.
 
+**FIP repair.** The tool checks the U-Boot partition header and only repairs it when the header is
+obviously invalid. If you suspect the FIP is silently corrupted (the header looks valid but the unit
+still fails to boot), use `--repair-fip` in Fix mode to force rewriting the U-Boot partition with the
+stock 6.7.54 FIP extracted from the firmware image.
+
+**RepairFIP mode.** If only the FIP is corrupted and the rest of the device is fine, use
+`--mode RepairFIP` to overwrite only the U-Boot partition without touching boot0, kernel0, or SPI flash.
+This is a quick targeted repair that does not apply the full eMMC workaround.
+
 ## After the fix
 
 - **Disconnect the serial adapter.** Stray noise can stop autoboot.
@@ -134,6 +181,36 @@ the AP comes back ready to adopt.
   itself and should show as `FirmwareCheckFailed`; a stock update would rewrite the boot loader and brick
   it again, so this is a just in case measure.
 - Factory reset = "Forget" in the controller, or the tool's reset mode. or SSH. Pick your poison, if you dare.
+
+## Restoring a fixed unit
+
+> [!NOTE]
+> Restore mode is only available in the **Python/Linux** implementation (`u6plus_fixer.py`).
+> It is not available on Windows.
+
+If you want to revert a fixed AP back to its pre-fix state (e.g. to return it for warranty or to try a
+different repair), use **Restore** mode with the backup that was created during the original fix.
+
+**What it does:**
+1. Validates the backup directory (all 9 files + SHA256SUMS.txt)
+2. Boots OpenWrt in RAM via serial (same as Fix)
+3. Restores eMMC from backup: boot0, boot1, GPT, partition data, and config
+4. Reboots into U-Boot (with ramfip fallback if the restored stock boot loader can't boot)
+5. Restores SPI flash from backup: EEPROM, U-Boot env, and the rest of the 16 MB NOR
+6. Clears the `bootcmd_real` environment variable so U-Boot uses the stock boot path again
+7. Verifies the unit attempts to boot from eMMC (stock behavior)
+
+**Usage:**
+```bash
+./run-fix.sh --mode Restore --com-port /dev/ttyUSB0 --adapter eth0 \
+  --backup-dir backups/AABBCCDDEEFF-20240101-120000
+```
+
+The backup directory is the one created by a previous Fix run under `backups/<MAC>-<timestamp>/`.
+If you don't remember which one, list the `backups/` folder.
+
+**⚠️ Important:** After restore, the AP will be back to its original bricked state if the eMMC link is
+still faulty. The restore does not repair the hardware; it only reverts the software modifications.
 
 ## Test status
 
@@ -144,6 +221,8 @@ Tested on two failed U6+ units (Kingston and Samsung eMMC):
 | Fix a never-touched dead unit, one power-on | ✅ |
 | Re-run on an already fixed unit | ✅ |
 | Factory reset mode | ✅ settings wiped, unit boots defaults |
+| Restore mode (revert to pre-fix state) | ✅ Linux only |
+| RepairFIP mode (overwrite U-Boot partition only) | ✅ Linux only |
 | Speed fallback to 5 MHz via software reboot (no power cycle) | ✅ |
 | Unattended boot and adoption into a controller | ✅ |
 | Update block: UniFi's own upgrade routine run on the AP | ✅ refused, no reboot, boot loader unchanged |
@@ -155,13 +234,19 @@ Tested on two failed U6+ units (Kingston and Samsung eMMC):
 
 | Message | Fix |
 | --- | --- |
-| *images have not been prepared* | Run `Prepare.bat` (needs Python 3 and internet) |
-| *Serial port ... does not exist / is in use* | Pick the right COM port; close PuTTY or any serial terminal |
+| *images have not been prepared* | Run `Prepare.bat` (Windows) or `./prepare.sh` (Linux). Needs Python 3 and internet. |
+| *Serial port ... does not exist / is in use* | Pick the right port (`COM5` on Windows, `/dev/ttyUSB0` on Linux); close PuTTY, minicom, or any serial terminal |
 | *connected to a network* | The Ethernet cable runs to a LAN. Cable the injector straight to the laptop or device: the recovery system runs a DHCP server |
 | *No response from the AP* | Check wiring, swap RX/TX, make sure the AP was unpowered at Start |
 | *not reliable even at 5 MHz* / *boot loader could not read the eMMC on its own* | This unit's eMMC link is too far gone for this method, in other words, ya cooked. |
 | *Unexpected eMMC partition layout* | Not a stock U6+ layout. Nothing was written |
-| Anything else | Open an issue with the `runs\<time>\` folder (`fix.log`, `console.log`) |
+| *pyserial is required* (Linux) | `pip3 install pyserial` |
+| *tkinter is required* (Linux GUI) | `sudo apt install python3-tk` (Debian/Ubuntu) or equivalent for your distro |
+| *ssh not found* (Linux) | Install OpenSSH client: `sudo apt install openssh-client` |
+| *Backup directory not found* (Restore) | Check the path to the backup folder under `backups/`. It should look like `backups/AABBCCDDEEFF-20240101-120000`. |
+| *Backup is missing required files* (Restore) | The backup may be incomplete. Use a backup from a complete Fix run. |
+| *U-Boot partition header is valid but boot still fails* | The FIP may be silently corrupted. Run Fix again with `--repair-fip` to force rewriting the U-Boot partition, or use `--mode RepairFIP` for a targeted repair. |
+| Anything else | Open an issue with the `runs/<time>/` folder (`fix.log`, `console.log`) |
 
 ## Why U6+ units fail
 
@@ -181,6 +266,53 @@ which a narrower, slower bus tolerates. UniFi firmware updates rewrite the boot 
 why units so often seem to die right after an update. This is our reading of the evidence, not a
 confirmed root cause.
 
+## Reading eMMC health data
+
+The tool saves eMMC health information to `backups/<MAC>-<timestamp>/emmc-info.txt`. Two key fields
+are `life_time` and `pre_eol_info`, which are JEDEC-standard EXT_CSD registers exposed by Linux.
+
+### `pre_eol_info` (0xC0) — Pre-End-of-Life Information
+
+| Value | Meaning |
+| --- | --- |
+| `0x00` | **Normal** — Device is healthy |
+| `0x01` | **Warning** — ~80% of rated life consumed |
+| `0x02` | **Urgent** — ~90% of rated life consumed |
+
+### `life_time` — Lifetime Estimates
+
+This is two bytes (registers 0xB1 and 0xB2):
+
+| Byte | Register | What it measures |
+| --- | --- | --- |
+| Byte 0 | `LIFE_TIME_EST_A` (0xB1) | Wear for **SLC/pSLC** blocks |
+| Byte 1 | `LIFE_TIME_EST_B` (0xB2) | Wear for **MLC/TLC** blocks |
+
+Scale for each byte:
+
+| Value | Life Used |
+| --- | --- |
+| `0x01` | 0–10% |
+| `0x02` | 10–20% |
+| `0x03` | 20–30% |
+| `0x04` | 30–40% |
+| ... | ... |
+| `0x0A` | 90–100% |
+| `0x0B` | Past rated life |
+
+### Example: `life_time=0x04 0x01`, `pre_eol_info=0x01`
+
+- **SLC wear: 0x04** = 30–40% of rated life used
+- **MLC/TLC wear: 0x01** = 0–10% of rated life used
+- **pre_eol_info: 0x01** = Warning status (~80% threshold reached)
+
+This pattern suggests the SLC cache/boot area has seen significant write activity (firmware updates,
+logging), while the main MLC storage is nearly fresh. The Warning status is driven by the SLC wear.
+
+> **Note:** These values are estimates. The tool logs them for reference, but the U6+ failure mode is
+> typically a marginal electrical link, not NAND wear-out. A unit with `0x0b` (past rated life) can work
+> fine at reduced speed, while a nearly new unit (`0x02`) can fail with CRC errors at full speed.
+
 ## How it works
 
 <details>
@@ -199,8 +331,9 @@ confirmed root cause.
   `/signature` is removed from U-Boot's control DT.
 - The **recovery system** is OpenWrt 25.12.5's own U6+ initramfs with the same 1-bit patch and the whole
   SPI NOR exposed read-only for backup.
-- Files reach U-Boot with its `tftpsrv` (the laptop pushes). Windows Firewall only allows the reply from
-  U-Boot's random source port because the tool first sends one packet to every port in 1024–4095.
+- Files reach U-Boot with its `tftpsrv` (the laptop pushes). On Windows, the tool primes every port in
+  1024–4095 because Windows Firewall only allows replies from ports the PC has sent to first. On Linux
+  this is not needed.
 
 </details>
 
@@ -222,16 +355,21 @@ confirmed root cause.
 ## Repository layout
 
 ```
-Prepare.bat              download + build the images (once per PC)
-U6Plus-Fixer.bat         GUI
-Run-Fix.bat              console
-Fix-U6Plus.ps1           recovery engine
-U6Plus-Fixer.ps1         GUI (WinForms)
-prepare/prepare.py       downloader / image builder (standard library only)
+Prepare.bat              download + build the images (Windows, once per PC)
+U6Plus-Fixer.bat         GUI launcher (Windows)
+Run-Fix.bat              console launcher (Windows)
+Fix-U6Plus.ps1           recovery engine (Windows PowerShell)
+U6Plus-Fixer.ps1         GUI (Windows WinForms)
+prepare.sh               download + build the images (Linux, once per PC)
+u6plus-fixer.sh          GUI launcher (Linux)
+run-fix.sh               console launcher (Linux)
+u6plus_fixer.py          recovery engine (Linux Python)
+u6plus_fixer_gui.py      GUI (Linux tkinter)
+prepare/prepare.py       downloader / image builder (standard library only, cross-platform)
 prepare/u6lib/           device-tree and cpio helpers
 firmware/bl2/            1-bit BL2 boot loaders (BSD-3-Clause) + provenance
 docs/img/                diagrams
-images/  bin/            built by Prepare.bat (git-ignored, never commit)
+images/  bin/            built by prepare (git-ignored, never commit)
 runs/  backups/          per-run logs and per-unit backups (git-ignored)
 ```
 
