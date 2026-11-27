@@ -37,6 +37,7 @@ About 10 minutes per AP.
 - [Test status](#test-status)
 - [Troubleshooting](#troubleshooting)
 - [Why U6+ units fail](#why-u6-units-fail)
+- [Reading eMMC health data](#reading-emmc-health-data)
 - [How it works](#how-it-works)
 - [Repository layout](#repository-layout)
 - [Credits and licenses](#credits-and-licenses)
@@ -264,6 +265,53 @@ fault looks like a marginal electrical link on the board side (signal integrity 
 which a narrower, slower bus tolerates. UniFi firmware updates rewrite the boot loader area, which is
 why units so often seem to die right after an update. This is our reading of the evidence, not a
 confirmed root cause.
+
+## Reading eMMC health data
+
+The tool saves eMMC health information to `backups/<MAC>-<timestamp>/emmc-info.txt`. Two key fields
+are `life_time` and `pre_eol_info`, which are JEDEC-standard EXT_CSD registers exposed by Linux.
+
+### `pre_eol_info` (0xC0) — Pre-End-of-Life Information
+
+| Value | Meaning |
+| --- | --- |
+| `0x00` | **Normal** — Device is healthy |
+| `0x01` | **Warning** — ~80% of rated life consumed |
+| `0x02` | **Urgent** — ~90% of rated life consumed |
+
+### `life_time` — Lifetime Estimates
+
+This is two bytes (registers 0xB1 and 0xB2):
+
+| Byte | Register | What it measures |
+| --- | --- | --- |
+| Byte 0 | `LIFE_TIME_EST_A` (0xB1) | Wear for **SLC/pSLC** blocks |
+| Byte 1 | `LIFE_TIME_EST_B` (0xB2) | Wear for **MLC/TLC** blocks |
+
+Scale for each byte:
+
+| Value | Life Used |
+| --- | --- |
+| `0x01` | 0–10% |
+| `0x02` | 10–20% |
+| `0x03` | 20–30% |
+| `0x04` | 30–40% |
+| ... | ... |
+| `0x0A` | 90–100% |
+| `0x0B` | Past rated life |
+
+### Example: `life_time=0x04 0x01`, `pre_eol_info=0x01`
+
+- **SLC wear: 0x04** = 30–40% of rated life used
+- **MLC/TLC wear: 0x01** = 0–10% of rated life used
+- **pre_eol_info: 0x01** = Warning status (~80% threshold reached)
+
+This pattern suggests the SLC cache/boot area has seen significant write activity (firmware updates,
+logging), while the main MLC storage is nearly fresh. The Warning status is driven by the SLC wear.
+
+> **Note:** These values are estimates. The tool logs them for reference, but the U6+ failure mode is
+> typically a marginal electrical link, not NAND wear-out. A unit with `0x0b` (past rated life) can work
+> fine at reduced speed, while a nearly new unit (`0x02`) can fail with CRC errors at full speed.
 
 ## How it works
 
